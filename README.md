@@ -1,4 +1,4 @@
-# 🏥 AI-Powered Appointment Booking System
+# AI-Powered Appointment Booking System
 
 This project implements an intelligent appointment booking system for a clinic, combining conversational AI, event-driven architecture, and cloud integrations.
 
@@ -30,7 +30,7 @@ The architecture follows a modular and loosely coupled design, enabling scalabil
 
 ---
 
-## ⚙️ Architecture
+## Architecture
 
 ### AI Agent
 Handles conversation logic and tool orchestration using an LLM. It decides when to call backend services such as availability checks or booking confirmation. :contentReference[oaicite:0]{index=0}
@@ -73,7 +73,7 @@ Acts as the user interface, forwarding messages to the AI agent and returning re
 
 ---
 
-## 🔧 Setup & Execution
+## Setup & Execution
 
 ### 1. Install dependencies
 
