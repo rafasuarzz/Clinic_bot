@@ -92,12 +92,15 @@ Python 3.10 · [Anthropic SDK](https://github.com/anthropics/anthropic-sdk-pytho
 ├── settings.py                # Paths, opening hours and environment variables
 ├── config/
 │   └── tratamientos.json      # Treatment catalog (editable)
+├── tests/                     # pytest suite (offline)
 ├── scripts/
 │   ├── autorizar_google.py    # One-time Google OAuth authorization
 │   └── migrar_json_a_sqlite.py# Migration from the legacy JSON storage
 ├── data/                      # Runtime files, git-ignored (DB, OAuth token, credentials)
 ├── requirements.txt
 ├── requirements-dev.txt       # + ruff (lint and format, configured in pyproject.toml)
+├── Dockerfile                 # One image for both services
+├── docker-compose.yml         # MCP server + bot
 └── .env.example
 ```
 
@@ -149,6 +152,17 @@ python telegram_bot.py
 ```
 
 Then open your bot in Telegram and say hi. In VS Code you can also use the **Servidor + Bot** launch configuration.
+
+### Or run it with Docker
+
+After steps 2 and 3 (the Google authorization opens a browser, so it runs on the host once):
+
+```bash
+docker compose up -d --build
+docker compose logs -f bot
+```
+
+Both services share one image. The MCP server is reachable only on the internal Compose network (no published ports), the bot waits for its `/health` check before starting, `data/` is mounted as a volume so the database and OAuth token survive restarts, and both containers restart automatically. Stop everything with `docker compose down`.
 
 ## Configuration
 

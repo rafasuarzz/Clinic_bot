@@ -33,3 +33,14 @@ jobs:
 
       - name: Tests
         run: pytest -v
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t clinic-bot .
+
+      - name: Smoke test
+        run: docker run --rm clinic-bot python -c "import settings, db, google_api, mcp_server, agent, telegram_bot"

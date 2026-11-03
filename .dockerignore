@@ -1,0 +1,17 @@
+# Secretos y datos: nunca dentro de la imagen (data/ se monta como volumen)
+.env
+data/
+
+# Entorno, caché y herramientas de desarrollo
+.venv/
+venv/
+**/__pycache__/
+**/*.pyc
+.pytest_cache/
+.ruff_cache/
+.git/
+.github/
+.idea/
+.vscode/
+.DS_Store
+tests/

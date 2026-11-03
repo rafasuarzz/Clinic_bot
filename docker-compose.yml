@@ -1,0 +1,35 @@
+# Uso: docker compose up -d --build
+# Antes, en el host: .env relleno, data/credentials.json y una vez `python scripts/autorizar_google.py`
+# (la autorización de Google abre un navegador, por eso no se hace dentro del contenedor).
+
+x-comun: &comun
+  build: .
+  image: clinic-bot
+  env_file: .env
+  volumes:
+    - ./data:/app/data # BD SQLite, token y credenciales de Google
+  restart: unless-stopped
+
+services:
+  mcp:
+    <<: *comun
+    command: ["python", "mcp_server.py"]
+    environment:
+      # Escucha en la red interna de compose; no se publica ningún puerto al exterior
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: 3333
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:3333/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  bot:
+    <<: *comun
+    command: ["python", "telegram_bot.py"]
+    environment:
+      MCP_URL: http://mcp:3333/mcp
+    depends_on:
+      mcp:
+        condition: service_healthy
