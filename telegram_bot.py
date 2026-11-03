@@ -1,67 +1,54 @@
+"""Bot de Telegram de la clínica: recibe mensajes y responde con el agente."""
 
-import os
-import json
-from pathlib import Path
-from dotenv import load_dotenv
+import logging
 
 from telegram import Update
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
-    ContextTypes,
-    filters,
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
+
+import settings
+from agent import ERROR_SISTEMA, ClinicaAgent
+
+log = logging.getLogger(__name__)
+agent = ClinicaAgent()
+
+BIENVENIDA = (
+    "Hola 👋 Bienvenido a la Clínica Pure.\n\n"
+    "Puedo ayudarte a:\n"
+    "• Informarte sobre tratamientos\n"
+    "• Reservar, cambiar o cancelar una cita\n\n"
+    "¿Qué te gustaría hacer?"
 )
 
-# Cargar .env ANTES de importar agent (crea el cliente de Anthropic al importarse)
-load_dotenv()
 
-from agent import ClinicaAgent
-
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TRATAMIENTOS_FILE = Path(__file__).resolve().parent / "config" / "tratamientos.json"
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text(BIENVENIDA)
 
 
-def cargar_tratamientos() -> list[str]:
-    if not TRATAMIENTOS_FILE.exists():
-        return []
-    data = json.loads(TRATAMIENTOS_FILE.read_text(encoding="utf-8"))
-    return [t["nombre"] for t in data]
-
-
-tratamientos = cargar_tratamientos()
-agent = ClinicaAgent(tratamientos)
-
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    welcome_text = (
-        "Hola 👋 Bienvenido a la Clínica Pure.\n\n"
-        "Puedo ayudarte a:\n"
-        "• Informarte sobre tratamientos\n"
-        "• Reservar una cita paso a paso\n\n"
-        "¿Qué te gustaría hacer?"
-    )
-    await update.message.reply_text(welcome_text)
-
-
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = str(update.effective_user.id)
+    await update.effective_chat.send_action("typing")
     try:
-        user_message = update.message.text
-        user_id = str(update.message.from_user.id)
-        response_text = await agent.process_message(user_message, user_id)
-        await update.message.reply_text(response_text)
-    except Exception as e:
-        await update.message.reply_text(f"Ha ocurrido un error: {e}\nPor favor, intenta de nuevo.")
+        respuesta = await agent.process_message(update.message.text, user_id)
+    except Exception:
+        # El detalle va al log; al usuario nunca se le muestran errores internos
+        log.exception("Error inesperado atendiendo a %s", user_id)
+        respuesta = ERROR_SISTEMA
+    await update.message.reply_text(respuesta)
 
 
-if __name__ == "__main__":
-    if not TELEGRAM_TOKEN:
-        raise RuntimeError("Falta TELEGRAM_BOT_TOKEN en .env")
+def main() -> None:
+    settings.configurar_logging()
+    if not settings.TELEGRAM_BOT_TOKEN:
+        raise SystemExit("Falta TELEGRAM_BOT_TOKEN en el .env")
 
-    # Atender a varios usuarios a la vez (el agente serializa los mensajes de cada usuario)
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).concurrent_updates(True).build()
+    # Varios usuarios a la vez (el agente serializa los mensajes de cada usuario)
+    app = ApplicationBuilder().token(settings.TELEGRAM_BOT_TOKEN).concurrent_updates(True).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    print("🤖 Bot de Telegram corriendo...")
+    log.info("🤖 Bot de Telegram corriendo")
     app.run_polling()
+
+
+if __name__ == "__main__":
+    main()

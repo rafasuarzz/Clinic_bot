@@ -1,21 +1,23 @@
-
 """
 Migra data/clientes.json (formato antiguo) a la base de datos SQLite.
 
 Uso (desde la raíz del proyecto):
-    python3 scripts/migrar_json_a_sqlite.py [ruta/a/clientes.json]
+    python scripts/migrar_json_a_sqlite.py [ruta/a/clientes.json]
 
 Es idempotente: los clientes y citas que ya existen no se duplican.
 """
+
 import json
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import db  # noqa: E402
+import settings  # noqa: E402
 
 
-def main(json_path: str = "data/clientes.json") -> None:
+def main(json_path: str = str(settings.DATA_DIR / "clientes.json")) -> None:
     datos = json.loads(Path(json_path).read_text(encoding="utf-8"))
     db.init_db()
 
@@ -24,7 +26,7 @@ def main(json_path: str = "data/clientes.json") -> None:
         for i, c in enumerate(datos):
             # Registros antiguos sin id de Telegram: se conservan con un id sintético
             cliente_id = str(c.get("id") or f"legacy-{i}")
-            creado = c.get("created_at") or db._now()
+            creado = c.get("created_at") or db.now()
             cur = conn.execute(
                 """
                 INSERT OR IGNORE INTO clientes
@@ -73,7 +75,7 @@ def main(json_path: str = "data/clientes.json") -> None:
                 )
                 n_citas += cur.rowcount
 
-    print(f"✅ Migración completada en {db.DB_PATH}: {n_clientes} clientes y {n_citas} citas nuevas.")
+    print(f"✅ Migración completada en {settings.DB_PATH}: {n_clientes} clientes y {n_citas} citas nuevas.")
 
 
 if __name__ == "__main__":

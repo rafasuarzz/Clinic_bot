@@ -68,7 +68,9 @@ sequenceDiagram
 
 - **The model cannot impersonate another client.** The `cliente_id` parameter is hidden from Claude's tool schemas and always injected by the bot with the sender's real Telegram ID, so a prompt injection cannot read or act on someone else's data.
 - **Ownership is enforced server-side, too.** `modificar_cita` and `cancelar_cita` check that the appointment belongs to the client *before* touching Calendar, and return the same error for "not yours" and "does not exist" so event IDs cannot be probed.
-- **No double bookings.** `confirmar_reserva` re-checks the slot right before creating the event, in case it was taken during the conversation.
+- **No double bookings.** `confirmar_reserva` and `modificar_cita` re-check the slot right before writing to Calendar, in case it was taken during the conversation.
+- **The server validates, not the model.** Dates in the past, weekends, malformed dates, slots outside opening hours and unknown treatments are rejected by the server with a clear `ToolError`, which Claude receives as a tool error and explains to the client.
+- **GDPR-friendly consent.** Marketing consent is opt-in (off by default) and is never withdrawn by accident when a returning client books again.
 - **Transactional storage.** Clients and appointments live in SQLite (foreign keys, WAL mode); a booking writes the client and the appointment in a single transaction.
 - **Recoverable conversations.** If anything fails mid-turn (API error, refusal, too many steps), the turn is rolled back so the history never contains a tool call without its result.
 - **Cost-aware.** Prompt caching reuses the system prompt, tool schemas and history across tool-use steps: a typical message costs about **$0.006** with Claude Sonnet 5.5. Model and reasoning effort are configurable.
@@ -83,8 +85,10 @@ Python 3.10 · [Anthropic SDK](https://github.com/anthropics/anthropic-sdk-pytho
 ```
 ├── telegram_bot.py            # Telegram interface (async, concurrent users)
 ├── agent.py                   # Claude tool-use loop, MCP client, identity injection
-├── mcp_server.py              # MCP server: booking tools + Google Calendar/Gmail
+├── mcp_server.py              # MCP server: booking tools and business rules
+├── google_api.py              # Google Calendar and Gmail access (OAuth)
 ├── db.py                      # SQLite data layer (clients, appointments)
+├── settings.py                # Paths, opening hours and environment variables
 ├── config/
 │   └── tratamientos.json      # Treatment catalog (editable)
 ├── scripts/
@@ -92,6 +96,7 @@ Python 3.10 · [Anthropic SDK](https://github.com/anthropics/anthropic-sdk-pytho
 │   └── migrar_json_a_sqlite.py# Migration from the legacy JSON storage
 ├── data/                      # Runtime files, git-ignored (DB, OAuth token, credentials)
 ├── requirements.txt
+├── requirements-dev.txt       # + ruff (lint and format, configured in pyproject.toml)
 └── .env.example
 ```
 

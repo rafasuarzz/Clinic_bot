@@ -1,199 +1,157 @@
+"""Agente de la clínica: bucle de tool use de Claude sobre las herramientas del servidor MCP."""
 
-# agent.py
-import os
-import json
 import asyncio
+import logging
 from collections import defaultdict
 from datetime import datetime
-from typing import Dict, Any, List, Tuple
-from zoneinfo import ZoneInfo
 
 from anthropic import AsyncAnthropic
 from fastmcp import Client
 
-# Lee ANTHROPIC_API_KEY del entorno (.env). La URL va fija para que un ANTHROPIC_BASE_URL
+import settings
+
+log = logging.getLogger(__name__)
+
+# Lee ANTHROPIC_API_KEY del entorno. La URL va fija para que un ANTHROPIC_BASE_URL
 # heredado de otra herramienta (p. ej. Claude Code) no desvíe las peticiones.
 client = AsyncAnthropic(base_url="https://api.anthropic.com")
 
-# Prefijo CLINICA_ para no chocar con variables de otras herramientas (p. ej. CLAUDE_* de Claude Code)
-MODEL = os.getenv("CLINICA_MODEL", "claude-sonnet-5-5")
-EFFORT = os.getenv("CLINICA_EFFORT", "low")  # low | medium | high: más alto = más razonamiento y más coste
+MAX_PASOS = 7  # llamadas al modelo por mensaje del usuario
 
-MCP_URL = os.getenv("MCP_URL", f"http://localhost:{os.getenv('MCP_PORT', '3333')}/mcp")
-TIMEZONE = os.getenv("TIMEZONE", "Atlantic/Canary")
+# Parámetro que rellena siempre el bot con el ID real de Telegram: se oculta al modelo
+# para que nadie pueda leer, reservar, cambiar ni cancelar como otro usuario.
+PARAM_CLIENTE = "cliente_id"
 
-def build_system_prompt(tratamientos: List[str]) -> str:
-    # fecha actual en zona horaria de la clínica
-    hoy = datetime.now(ZoneInfo(TIMEZONE)).date().isoformat()
-    tratamientos_txt = ", ".join(tratamientos)
-    return f"""
-Eres el asistente virtual de la Clínica Pure.
-INFORMACIÓN:
-- Fecha actual: {hoy}
-- Zona horaria: {TIMEZONE}
-- Tratamientos disponibles: {tratamientos_txt}
-- El sistema identifica automáticamente al usuario: las herramientas ya saben quién es.
+ERROR_SISTEMA = "Lo siento, ahora mismo no puedo acceder al sistema de reservas. Inténtalo de nuevo en unos minutos."
 
+REGLAS = """
 REGLAS:
-0) Antes de pedir datos personales, llama a la herramienta 'obtener_cliente'.
-   - Si el cliente existe, NO vuelvas a pedir nombre ni contacto. Reutiliza su nombre y su email.
-   - La confirmación y promociones se envían SOLO por email.
-
-1) Fechas:
-   - Acepta 'YYYY-MM-DD' o 'DD/MM/AAAA'. Internamente usa 'YYYY-MM-DD'.
-   - No agendes fines de semana (sábado o domingo). Si el servidor lo rechaza, pide otra fecha hábil.
-
-2) Información previa:
-   - Si preguntan por un tratamiento (precio, duración, descripción, contraindicaciones),
-     usa 'info_tratamiento' (solo para consultas previas).
-
-3) Reserva:
-   - Pide tratamiento y fecha → llama 'ver_disponibilidad' → propone horas.
-   - Para confirmar, si NO hay registro previo pide nombre y email. Si SÍ hay, no los pidas.
-
-4) Confirmación:
-   - Llama a 'confirmar_reserva' SIEMPRE incluyendo 'nombre', 'tratamiento', 'fecha', 'hora' y 'email'.
-   - Incluye en la respuesta fecha/hora y el nombre del tratamiento.
-
-5) Cambios:
-   - El 'calendar_event_id' de cada cita lo obtienes de 'citas_activas' en 'obtener_cliente'.
-     Nunca lo pidas al usuario ni lo inventes. Si tiene varias citas, pregunta cuál.
-   - Para CAMBIAR una cita existente, usa 'modificar_cita' con 'calendar_event_id', 'nueva_fecha', 'nueva_hora'.
-     (El servidor enviará email de confirmación del cambio.)
-   - Para CANCELAR una cita, PREGUNTA primero el MOTIVO de cancelación (obligatorio) y luego usa 'cancelar_cita'
-     con 'calendar_event_id' y 'motivo'. El servidor enviará email de confirmación de cancelación.
-
-6) Tono profesional, respuestas claras y breves. Escribe texto plano (es un chat de Telegram, sin Markdown).
+1) Antes de pedir datos personales, llama a 'obtener_cliente'.
+   - Si está registrado, NO vuelvas a pedir nombre ni email: reutilízalos.
+   - Las confirmaciones se envían SOLO por email.
+2) Si preguntan por un tratamiento (precio, duración, contraindicaciones...), usa 'info_tratamiento'.
+3) Reserva: pide tratamiento y fecha → 'ver_disponibilidad' → propone las horas libres.
+   - Si no está registrado, pide nombre y email antes de confirmar.
+   - Llama a 'confirmar_reserva' y responde con el tratamiento, la fecha y la hora.
+   - Envía consentimiento_marketing=true solo si el cliente pide expresamente recibir promociones.
+4) Cambios y cancelaciones:
+   - El 'calendar_event_id' sale de 'citas_activas' en 'obtener_cliente'. Nunca lo pidas ni lo inventes;
+     si tiene varias citas, pregunta cuál.
+   - Para cambiar una cita, usa 'modificar_cita'.
+   - Para cancelar, PREGUNTA primero el motivo y después usa 'cancelar_cita'.
+5) Si una herramienta devuelve un error, explícaselo al cliente con tus palabras y propón una alternativa.
+6) Tono profesional, respuestas claras y breves. Texto plano, sin Markdown (es un chat de Telegram).
 """
 
 
-# ===============================
-# HERRAMIENTAS (se cargan del servidor MCP)
-# ===============================
-# Parámetro que rellena siempre el bot con el ID real de Telegram: se oculta al modelo
-PARAM_CLIENTE = "cliente_id"
+def build_system_prompt() -> str:
+    hoy = datetime.now(settings.TZ).strftime("%A %Y-%m-%d")
+    tratamientos = ", ".join(t["nombre"] for t in settings.cargar_tratamientos())
+    return (
+        "Eres el asistente virtual de la Clínica Pure.\n"
+        f"- Fecha actual: {hoy} (zona horaria {settings.TIMEZONE})\n"
+        f"- Tratamientos disponibles: {tratamientos}\n"
+        "- El sistema identifica automáticamente al usuario: las herramientas ya saben quién es.\n" + REGLAS
+    )
 
-def _mcp_tool_to_claude(tool) -> Dict[str, Any]:
-    """Convierte una tool MCP (list_tools) al formato de herramientas de la API de Claude."""
-    schema = dict(tool.inputSchema)
-    schema["properties"] = {k: v for k, v in schema.get("properties", {}).items() if k != PARAM_CLIENTE}
-    schema["required"] = [r for r in schema.get("required", []) if r != PARAM_CLIENTE]
-    return {
-        "name": tool.name,
-        "description": tool.description or "",
-        "input_schema": schema,
-    }
 
-def _tools_con_cliente(mcp_tools) -> set:
-    """Nombres de las tools del servidor que reciben cliente_id."""
-    return {t.name for t in mcp_tools if PARAM_CLIENTE in t.inputSchema.get("properties", {})}
+def preparar_tools(mcp_tools) -> tuple[list[dict], set[str]]:
+    """
+    Convierte las tools MCP al formato de Claude, quitando cliente_id de los esquemas.
+    Devuelve también los nombres de las tools que lo reciben, para que el bot lo inyecte.
+    """
+    tools, con_cliente = [], set()
+    for t in mcp_tools:
+        schema = dict(t.inputSchema)
+        propiedades = schema.get("properties", {})
+        if PARAM_CLIENTE in propiedades:
+            con_cliente.add(t.name)
+            schema["properties"] = {k: v for k, v in propiedades.items() if k != PARAM_CLIENTE}
+            schema["required"] = [r for r in schema.get("required", []) if r != PARAM_CLIENTE]
+        tools.append({"name": t.name, "description": t.description or "", "input_schema": schema})
+    return tools, con_cliente
 
-def _result_to_payload(result) -> Dict[str, Any]:
-    """Convierte un CallToolResult de MCP en el dict que ve el modelo."""
-    text = "\n".join(getattr(c, "text", "") for c in result.content if getattr(c, "type", "") == "text")
-    if result.is_error:
-        return {"ok": False, "error": text or "Error en la herramienta"}
-    if isinstance(result.structured_content, dict):
-        return result.structured_content
-    try:
-        return json.loads(text)
-    except Exception:
-        return {"ok": True, "data": text}
+
+def _texto(bloques) -> str:
+    return "\n".join(b.text for b in bloques if getattr(b, "type", "") == "text").strip()
+
 
 class TurnoFallido(Exception):
     """Turno que hay que deshacer, con el mensaje que verá el usuario."""
 
-def _final_text(response) -> str:
-    """Une los bloques de texto de la respuesta (ignora thinking y tool_use)."""
-    return "\n".join(b.text for b in response.content if b.type == "text").strip()
 
 class ClinicaAgent:
-    def __init__(self, tratamientos: List[str]):
-        self.tratamientos = tratamientos
-        self.context: Dict[str, List[Dict[str, Any]]] = {}
+    def __init__(self):
+        self.historiales: dict[str, list[dict]] = {}
         # Un mensaje a la vez por usuario, para no mezclar su historial
-        self.locks: Dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+        self.locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
-    async def _call_tool(self, mcp: Client, name: str, args: Dict[str, Any], user_id: str, con_cliente: set) -> Tuple[Dict[str, Any], bool]:
-        """Ejecuta la tool en el servidor MCP. Devuelve (payload, is_error)."""
-        # El cliente_id lo pone el bot, no el modelo: así nadie puede leer, reservar,
-        # cambiar ni cancelar como otro usuario
-        args.pop(PARAM_CLIENTE, None)
-        if name in con_cliente:
-            args[PARAM_CLIENTE] = user_id
-        try:
-            result = await mcp.call_tool(name, args, raise_on_error=False, timeout=30)
-            return _result_to_payload(result), bool(result.is_error)
-        except Exception as e:
-            return {"ok": False, "error": f"Fallo al llamar a la herramienta MCP '{name}': {e}"}, True
-
-    async def process_message(self, user_message: str, user_id: str) -> str:
-        """
-        1) Enviamos historial + mensaje del usuario → Claude puede responder con bloques tool_use.
-        2) Ejecutamos cada tool en el servidor MCP y devolvemos los tool_result en un único mensaje 'user'.
-        3) Repetimos hasta que Claude termine (stop_reason != 'tool_use') y devolvemos su texto.
-        """
+    async def process_message(self, mensaje: str, user_id: str) -> str:
         async with self.locks[user_id]:
-            history = self.context.setdefault(user_id, [])
-            checkpoint = len(history)
-            history.append({"role": "user", "content": user_message})
+            historial = self.historiales.setdefault(user_id, [])
+            checkpoint = len(historial)
+            historial.append({"role": "user", "content": mensaje})
             try:
-                async with Client(MCP_URL) as mcp:
-                    mcp_tools = await mcp.list_tools()
-                    tools = [_mcp_tool_to_claude(t) for t in mcp_tools]
-                    system = build_system_prompt(self.tratamientos)
-                    return await self._run(mcp, tools, _tools_con_cliente(mcp_tools), system, history, user_id)
+                async with Client(settings.MCP_URL) as mcp:
+                    tools, con_cliente = preparar_tools(await mcp.list_tools())
+                    return await self._run(mcp, tools, con_cliente, historial, user_id)
             except TurnoFallido as e:
-                del history[checkpoint:]
-                print(f"⚠️ Turno deshecho para {user_id}: {e.__cause__ or e}")
+                del historial[checkpoint:]
                 return str(e)
-            except Exception as e:
+            except Exception:
                 # Deshacer el turno: un tool_use sin su tool_result rompería las siguientes peticiones
-                del history[checkpoint:]
-                print(f"❌ Error procesando mensaje de {user_id}: {e!r}")
-                return "Lo siento, ahora mismo no puedo acceder al sistema de reservas. Inténtalo de nuevo en unos minutos."
+                del historial[checkpoint:]
+                log.exception("Error procesando el mensaje de %s", user_id)
+                return ERROR_SISTEMA
 
-    async def _run(self, mcp: Client, tools: List[Dict[str, Any]], con_cliente: set, system: str, history: List[Dict[str, Any]], user_id: str) -> str:
-        max_iterations = 7
-        for _ in range(max_iterations):
+    async def _run(
+        self, mcp: Client, tools: list[dict], con_cliente: set[str], historial: list[dict], user_id: str
+    ) -> str:
+        """
+        Bucle de tool use: mientras Claude pida herramientas, se ejecutan en el servidor MCP
+        y sus resultados vuelven en un único mensaje 'user'. Al terminar, devuelve su texto.
+        """
+        system = build_system_prompt()
+        for _ in range(MAX_PASOS):
             rsp = await client.beta.messages.create(
-                model=MODEL,
+                model=settings.MODEL,
                 max_tokens=16000,
                 system=system,
                 tools=tools,
-                messages=history,
-                output_config={"effort": EFFORT},
+                messages=historial,
+                output_config={"effort": settings.EFFORT},
                 cache_control={"type": "ephemeral"},  # reutiliza prompt + tools + historial entre pasos
                 # Si un filtro de seguridad rechaza la petición por error, la reintenta con otro modelo
                 betas=["server-side-fallback-2026-07-01"],
                 fallbacks="default",
             )
-
             if rsp.stop_reason == "refusal":
-                print(f"⚠️ Rechazo del modelo: {rsp.stop_details}")
-                raise TurnoFallido("Lo siento, no puedo ayudarte con eso. ¿Puedo ayudarte con algún tratamiento o cita?")
+                log.warning("Rechazo del modelo para %s: %s", user_id, rsp.stop_details)
+                raise TurnoFallido("Lo siento, no puedo ayudarte con eso. ¿Te ayudo con algún tratamiento o cita?")
 
-            # Guardar el contenido completo (incluye thinking y tool_use, que deben volver tal cual)
-            history.append({"role": "assistant", "content": rsp.content})
+            # Se guarda el contenido completo: thinking y tool_use deben volver tal cual
+            historial.append({"role": "assistant", "content": rsp.content})
 
             tool_uses = [b for b in rsp.content if b.type == "tool_use"]
             if rsp.stop_reason != "tool_use" or not tool_uses:
-                return _final_text(rsp) or "¿Podrías reformular tu solicitud?"
+                return _texto(rsp.content) or "¿Podrías reformular tu solicitud?"
 
-            tool_results = []
-            for tu in tool_uses:
-                args = dict(tu.input or {})
-                print(f"🔧 Llamando a {tu.name} con {args}")
-                payload, is_error = await self._call_tool(mcp, tu.name, args, user_id, con_cliente)
-                print(f"🧩 Resultado MCP {tu.name} → {payload}")
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": tu.id,
-                    "content": json.dumps(payload, ensure_ascii=False),
-                    "is_error": is_error,
-                })
-            # Todos los resultados en un único mensaje
-            history.append({"role": "user", "content": tool_results})
+            resultados = [await self._call_tool(mcp, tu, con_cliente, user_id) for tu in tool_uses]
+            historial.append({"role": "user", "content": resultados})
 
-        # Se agotaron los pasos con un tool_use pendiente: deshacerlo para no romper el historial
         raise TurnoFallido("Lo siento, necesité más pasos de los previstos. ¿Puedes repetir tu última solicitud?")
+
+    async def _call_tool(self, mcp: Client, tool_use, con_cliente: set[str], user_id: str) -> dict:
+        """Ejecuta un bloque tool_use en el servidor MCP y devuelve su bloque tool_result."""
+        args = {k: v for k, v in (tool_use.input or {}).items() if k != PARAM_CLIENTE}
+        if tool_use.name in con_cliente:
+            args[PARAM_CLIENTE] = user_id
+        log.info("🔧 %s(%s)", tool_use.name, args)
+        try:
+            # El resultado MCP ya viene como texto (JSON o mensaje de error) listo para el modelo
+            result = await mcp.call_tool(tool_use.name, args, raise_on_error=False, timeout=30)
+            contenido, is_error = _texto(result.content) or "(sin contenido)", result.is_error
+        except Exception as e:
+            contenido, is_error = f"No se pudo ejecutar la herramienta '{tool_use.name}': {e}", True
+        log.info("🧩 %s → %s%s", tool_use.name, "ERROR " if is_error else "", contenido[:300])
+        return {"type": "tool_result", "tool_use_id": tool_use.id, "content": contenido, "is_error": is_error}
