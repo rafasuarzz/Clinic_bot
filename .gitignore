@@ -1,0 +1,16 @@
+# Secretos y credenciales
+.env
+token.pickle
+data/credentials.json
+
+# Datos personales de clientes
+data/clientes.json
+
+# Entorno y caché
+venv/
+__pycache__/
+*.pyc
+
+# IDE / sistema
+.idea/
+.DS_Store

@@ -1,0 +1,33 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Servidor MCP",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/mcp_server.py",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "python": "/Library/Frameworks/Python.framework/Versions/3.10/bin/python3"
+    },
+    {
+      "name": "Bot de Telegram",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/telegram_bot.py",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "python": "/Library/Frameworks/Python.framework/Versions/3.10/bin/python3"
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Servidor + Bot",
+      "configurations": [
+        "Servidor MCP",
+        "Bot de Telegram"
+      ],
+      "stopAll": true
+    }
+  ]
+}

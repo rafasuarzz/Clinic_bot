@@ -1,0 +1,82 @@
+[
+  {
+    "nombre": "Botox",
+    "duracion": 30,
+    "descripcion": "Tratamiento estético facial para la reducción de arrugas de expresión.",
+    "indicaciones": "Arrugas en frente, entrecejo y patas de gallo.",
+    "contraindicaciones": "Embarazo, lactancia, alergia a la toxina botulínica.",
+    "precio": 250
+  },
+  {
+    "nombre": "Ácido hialurónico",
+    "duracion": 45,
+    "descripcion": "Relleno dérmico para volumen y definición facial.",
+    "indicaciones": "Labios, pómulos, surcos nasogenianos.",
+    "contraindicaciones": "Enfermedades autoinmunes, embarazo, infección en la zona.",
+    "precio": 350
+  },
+  {
+    "nombre": "Limpieza facial",
+    "duracion": 60,
+    "descripcion": "Tratamiento de limpieza profunda de la piel.",
+    "indicaciones": "Piel con impurezas, puntos negros, exceso de grasa.",
+    "contraindicaciones": "Heridas abiertas, irritación o infecciones cutáneas.",
+    "precio": 80
+  },
+  {
+    "nombre": "Peeling químico",
+    "duracion": 50,
+    "descripcion": "Exfoliación química para renovar la piel y mejorar textura.",
+    "indicaciones": "Manchas, acné, arrugas finas, piel apagada.",
+    "contraindicaciones": "Herpes activo, piel muy sensible, embarazo.",
+    "precio": 120
+  },
+  {
+    "nombre": "Mesoterapia facial",
+    "duracion": 40,
+    "descripcion": "Microinyecciones de vitaminas y ácido hialurónico para revitalizar la piel.",
+    "indicaciones": "Piel deshidratada, pérdida de luminosidad, arrugas finas.",
+    "contraindicaciones": "Embarazo, enfermedades autoinmunes, alergias a componentes.",
+    "precio": 150
+  },
+  {
+    "nombre": "Microblading",
+    "duracion": 90,
+    "descripcion": "Técnica semipermanente de diseño de cejas con pigmentos.",
+    "indicaciones": "Cejas poco pobladas, diseño estético de cejas.",
+    "contraindicaciones": "Embarazo, diabetes descontrolada, piel con cicatrices en la zona.",
+    "precio": 250
+  },
+  {
+    "nombre": "Depilación láser",
+    "duracion": 30,
+    "descripcion": "Eliminación permanente del vello mediante láser.",
+    "indicaciones": "Vello facial y corporal no deseado.",
+    "contraindicaciones": "Embarazo, piel bronceada recientemente, medicamentos fotosensibilizantes.",
+    "precio": 100
+  },
+  {
+    "nombre": "Radiofrecuencia facial",
+    "duracion": 60,
+    "descripcion": "Tratamiento para reafirmar y tensar la piel mediante energía de radiofrecuencia.",
+    "indicaciones": "Flacidez facial, arrugas leves, pérdida de firmeza.",
+    "contraindicaciones": "Marcapasos, embarazo, infecciones en la zona.",
+    "precio": 180
+  },
+  {
+    "nombre": "Hilos tensores",
+    "duracion": 75,
+    "descripcion": "Rejuvenecimiento facial mediante hilos absorbibles para levantar y tensar piel.",
+    "indicaciones": "Flacidez facial leve a moderada.",
+    "contraindicaciones": "Infecciones activas, trastornos de coagulación, embarazo.",
+    "precio": 400
+  },
+  {
+    "nombre": "Tratamiento capilar PRP",
+    "duracion": 60,
+    "descripcion": "Plasma rico en plaquetas para estimular el crecimiento capilar.",
+    "indicaciones": "Caída de cabello, debilitamiento del folículo.",
+    "contraindicaciones": "Enfermedades hematológicas, infección activa, embarazo.",
+    "precio": 250
+  }
+]
