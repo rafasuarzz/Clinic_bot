@@ -8,7 +8,7 @@
       "program": "${workspaceFolder}/mcp_server.py",
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
-      "python": "/Library/Frameworks/Python.framework/Versions/3.10/bin/python3"
+      "python": "${workspaceFolder}/.venv/bin/python"
     },
     {
       "name": "Bot de Telegram",
@@ -17,7 +17,7 @@
       "program": "${workspaceFolder}/telegram_bot.py",
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
-      "python": "/Library/Frameworks/Python.framework/Versions/3.10/bin/python3"
+      "python": "${workspaceFolder}/.venv/bin/python"
     }
   ],
   "compounds": [

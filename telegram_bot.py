@@ -13,13 +13,13 @@ from telegram.ext import (
     filters,
 )
 
-# Cargar .env ANTES de importar agent (crea el cliente OpenAI al importarse)
+# Cargar .env ANTES de importar agent (crea el cliente de Anthropic al importarse)
 load_dotenv()
 
 from agent import ClinicaAgent
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TRATAMIENTOS_FILE = Path("data/tratamientos.json")
+TRATAMIENTOS_FILE = Path(__file__).resolve().parent / "config" / "tratamientos.json"
 
 
 def cargar_tratamientos() -> list[str]:

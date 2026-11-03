@@ -1,16 +1,14 @@
-# Secretos y credenciales
+# Secretos
 .env
-token.pickle
-data/credentials.json
 
-# Datos personales de clientes
-data/clientes.json
-data/clientes.backup.json
-data/*.db
-data/*.db-*
+# Datos de ejecución: credenciales de Google, token, base de datos y datos de clientes.
+# Solo se versiona el marcador para que la carpeta exista al clonar.
+data/*
+!data/.gitkeep
 
 # Entorno y caché
 venv/
+.venv/
 __pycache__/
 *.pyc
 

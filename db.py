@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
-DB_PATH = os.getenv("CLINICA_DB", "data/clinica.db")
+DB_PATH = os.getenv("CLINICA_DB", str(Path(__file__).resolve().parent / "data" / "clinica.db"))
 
 ESTADOS = ("confirmada", "modificada", "cancelada")
 

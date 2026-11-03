@@ -34,15 +34,16 @@ SCOPES = [
     "https://www.googleapis.com/auth/gmail.send",
 ]
 
-CREDENTIALS_PATH = "data/credentials.json"
-TOKEN_PATH = "token.pickle"
+BASE_DIR = Path(__file__).resolve().parent
+CREDENTIALS_PATH = BASE_DIR / "data" / "credentials.json"
+TOKEN_PATH = BASE_DIR / "data" / "token.pickle"
 
 CALENDAR_ID = "primary"
 TIMEZONE = "Atlantic/Canary"  # Canarias (WET/WEST)
 HORAS_DISPONIBLES: List[str] = ["10:00", "11:00", "12:00", "16:00", "17:00"]
 SLOT_MINUTES = 45
 
-TRATAMIENTOS_JSON = "data/tratamientos.json"
+TRATAMIENTOS_JSON = BASE_DIR / "config" / "tratamientos.json"
 
 db.init_db()
 mcp = FastMCP("Clinica MCP")
