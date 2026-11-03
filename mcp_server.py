@@ -17,10 +17,13 @@ from starlette.responses import JSONResponse
 from starlette.requests import Request
 
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request as GoogleRequest
 
 load_dotenv()
+
+import db  # después de load_dotenv: lee CLINICA_DB del entorno
 
 # =============================================================================
 # CONFIG
@@ -40,8 +43,8 @@ HORAS_DISPONIBLES: List[str] = ["10:00", "11:00", "12:00", "16:00", "17:00"]
 SLOT_MINUTES = 45
 
 TRATAMIENTOS_JSON = "data/tratamientos.json"
-CLIENTES_JSON = "data/clientes.json"
 
+db.init_db()
 mcp = FastMCP("Clinica MCP")
 
 # =============================================================================
@@ -81,14 +84,6 @@ def _read_json(path: str, default):
         return default
     except Exception:
         return default
-
-def _write_json(path: str, data) -> bool:
-    try:
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
-        Path(path).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        return True
-    except Exception:
-        return False
 
 def _parse_fecha_to_iso(fecha_str: str) -> str:
     """
@@ -272,17 +267,34 @@ def _crear_cita(nombre: str, tratamiento: str, fecha: str, hora: str) -> Dict[st
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
+def _cita_del_cliente(calendar_event_id: str, cliente_id: str) -> tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    """
+    Devuelve (cita, None) si la cita existe, pertenece al cliente y no está cancelada;
+    si no, (None, error). Mismo mensaje para "no existe" y "es de otro cliente",
+    para no revelar qué IDs existen.
+    """
+    cita = db.get_cita(calendar_event_id)
+    if not cita or cita["cliente_id"] != cliente_id:
+        return None, {"ok": False, "error": "No se encontró esa cita entre las citas del cliente."}
+    if cita["estado"] == "cancelada":
+        return None, {"ok": False, "error": "Esa cita ya está cancelada."}
+    return cita, None
+
 @mcp.tool(
     name="modificar_cita",
-    description="Cambia la fecha/hora de una cita existente (mismo evento de Calendar) y envía email de confirmación del cambio.",
+    description="Cambia la fecha/hora de una cita del cliente (mismo evento de Calendar) y envía email de confirmación del cambio.",
 )
-def modificar_cita(calendar_event_id: EventId, nueva_fecha: Fecha, nueva_hora: Hora) -> Dict[str, Any]:
+def modificar_cita(cliente_id: ClienteId, calendar_event_id: EventId, nueva_fecha: Fecha, nueva_hora: Hora) -> Dict[str, Any]:
     try:
+        cita, error = _cita_del_cliente(calendar_event_id, cliente_id)
+        if error:
+            return error
+
         fecha_iso = _parse_fecha_to_iso(nueva_fecha)
         if _is_weekend(fecha_iso):
             return {"ok": False, "error": "No se pueden mover citas a sábado o domingo."}
 
-        error_slot = _comprobar_slot_libre("", fecha_iso, nueva_hora)
+        error_slot = _comprobar_slot_libre(cita["tratamiento"], fecha_iso, nueva_hora)
         if error_slot:
             return error_slot
 
@@ -302,41 +314,21 @@ def modificar_cita(calendar_event_id: EventId, nueva_fecha: Fecha, nueva_hora: H
             },
         ).execute()
 
-        # Actualizar historial y obtener datos del cliente (nombre/email) para notificación
-        db = _read_json(CLIENTES_JSON, default=[])
-        now_iso = datetime.now(ZoneInfo(TIMEZONE)).isoformat()
-        cliente_email = None
-        cliente_nombre = None
-        prev_fecha, prev_hora = None, None
-
-        for c in db:
-            for hst in c.get("historial", []):
-                if hst.get("calendar_event_id") == calendar_event_id:
-                    prev_fecha = hst.get("fecha")
-                    prev_hora = hst.get("hora")
-                    hst["fecha"] = fecha_iso
-                    hst["hora"] = nueva_hora
-                    hst["status"] = "modificada"
-                    hst["updated_at"] = now_iso
-                    hst["anterior"] = {"fecha": prev_fecha, "hora": prev_hora}
-                    cliente_email = c.get("email")
-                    cliente_nombre = c.get("nombre")
-                    c["updated_at"] = now_iso
-
-        _write_json(CLIENTES_JSON, db)
+        db.actualizar_fecha_cita(calendar_event_id, fecha_iso, nueva_hora)
 
         # Enviar email de confirmación de cambio si tenemos correo
+        cliente = db.get_cliente(cliente_id) or {}
         notif_result = None
-        if cliente_email:
+        if cliente.get("email"):
             cuerpo = (
-                f"Hola {cliente_nombre or ''}, hemos modificado tu cita.\n"
-                f"📝 Antes: {prev_fecha} {prev_hora}\n"
+                f"Hola {cliente.get('nombre') or ''}, hemos modificado tu cita de {cita['tratamiento']}.\n"
+                f"📝 Antes: {cita['fecha']} {cita['hora']}\n"
                 f"✅ Ahora: {fecha_iso} {nueva_hora}\n"
                 f"🔗 Enlace del evento: {updated.get('htmlLink','(no disponible)')}\n\n"
                 f"Gracias por confiar en Clínica Pure."
             )
             notif_result = _send_email(
-                to_email=cliente_email,
+                to_email=cliente["email"],
                 subject=f"Confirmación de cambio de cita ({fecha_iso} {nueva_hora})",
                 body_text=cuerpo,
             )
@@ -355,49 +347,42 @@ def modificar_cita(calendar_event_id: EventId, nueva_fecha: Fecha, nueva_hora: H
 
 @mcp.tool(
     name="cancelar_cita",
-    description="Cancela una cita existente, guarda el motivo en el historial y envía email de confirmación.",
+    description="Cancela una cita del cliente, guarda el motivo en el historial y envía email de confirmación.",
 )
 def cancelar_cita(
+    cliente_id: ClienteId,
     calendar_event_id: EventId,
     motivo: Annotated[str, Field(description="Motivo de cancelación proporcionado por el usuario")],
 ) -> Dict[str, Any]:
     try:
+        cita, error = _cita_del_cliente(calendar_event_id, cliente_id)
+        if error:
+            return error
+
         service = get_calendar_service()
-        service.events().delete(calendarId=CALENDAR_ID, eventId=calendar_event_id).execute()
+        try:
+            service.events().delete(calendarId=CALENDAR_ID, eventId=calendar_event_id).execute()
+        except HttpError as e:
+            # Si ya no existe en Calendar (borrado a mano), basta con marcarla cancelada
+            if e.resp.status not in (404, 410):
+                raise
 
-        # Marcar en historial como cancelada (con motivo) y preparar notificación
-        db = _read_json(CLIENTES_JSON, default=[])
-        now_iso = datetime.now(ZoneInfo(TIMEZONE)).isoformat()
-        cliente_email = None
-        cliente_nombre = None
-        cita_info = None
-
-        for c in db:
-            for hst in c.get("historial", []):
-                if hst.get("calendar_event_id") == calendar_event_id:
-                    hst["status"] = "cancelada"
-                    hst["cancelled_at"] = now_iso
-                    if motivo:
-                        hst["motivo_cancelacion"] = motivo
-                    c["updated_at"] = now_iso
-                    cliente_email = c.get("email")
-                    cliente_nombre = c.get("nombre")
-                    cita_info = {"fecha": hst.get("fecha"), "hora": hst.get("hora"), "tratamiento": hst.get("tratamiento")}
-        _write_json(CLIENTES_JSON, db)
+        db.cancelar_cita(calendar_event_id, motivo)
 
         # Enviar email de confirmación de cancelación si tenemos correo
+        cliente = db.get_cliente(cliente_id) or {}
         notif_result = None
-        if cliente_email:
+        if cliente.get("email"):
             cuerpo = (
-                f"Hola {cliente_nombre or ''}, tu cita ha sido cancelada.\n"
-                f"📅 Fecha: {cita_info.get('fecha') if cita_info else '(desconocida)'}\n"
-                f"⏰ Hora: {cita_info.get('hora') if cita_info else '(desconocida)'}\n"
-                f"🏥 Tratamiento: {cita_info.get('tratamiento') if cita_info else '(desconocido)'}\n"
-                f"🗒 Motivo: {motivo or '(no especificado)'}\n\n"
+                f"Hola {cliente.get('nombre') or ''}, tu cita ha sido cancelada.\n"
+                f"📅 Fecha: {cita['fecha']}\n"
+                f"⏰ Hora: {cita['hora']}\n"
+                f"🏥 Tratamiento: {cita['tratamiento']}\n"
+                f"🗒 Motivo: {motivo}\n\n"
                 f"Si necesitas reprogramar, estaré encantado de ayudarte."
             )
             notif_result = _send_email(
-                to_email=cliente_email,
+                to_email=cliente["email"],
                 subject="Confirmación de cancelación de cita",
                 body_text=cuerpo,
             )
@@ -408,7 +393,7 @@ def cancelar_cita(
 
 @mcp.tool(
     name="confirmar_reserva",
-    description="Crea la cita, envía confirmación por email y registra al cliente en clientes.json.",
+    description="Crea la cita en Calendar, envía confirmación por email y registra al cliente y la cita.",
 )
 def confirmar_reserva(
     cliente_id: ClienteId,
@@ -421,8 +406,8 @@ def confirmar_reserva(
 ) -> Dict[str, Any]:
     """
     1) Crea la cita en Calendar.
-    2) Envía confirmación por email con datos de la cita.
-    3) Actualiza clientes.json (status 'confirmada') y añade entrada a historial.
+    2) Registra cliente y cita en la base de datos.
+    3) Envía confirmación por email con datos de la cita.
     """
     try:
         fecha_iso = _parse_fecha_to_iso(fecha)
@@ -438,53 +423,31 @@ def confirmar_reserva(
         if not cita.get("ok"):
             return {"ok": False, "error": cita.get("error", "Error al crear cita")}
 
-        resumen = (
-            f"Hola {nombre}, tu cita para {tratamiento} queda confirmada.\n"
-            f"📅 Fecha: {fecha_iso}\n"
-            f"⏰ Hora: {hora}\n"
-            f"🔗 Enlace del evento: {cita.get('htmlLink','(no disponible)')}\n\n"
-            f"Gracias por confiar en Clínica Pure."
-        )
-        notif_result = _send_email(
-            to_email=email,
-            subject=f"Confirmación de cita: {tratamiento} ({fecha_iso} {hora})",
-            body_text=resumen,
+        db.registrar_reserva(
+            cliente_id=cliente_id,
+            nombre=nombre,
+            email=email,
+            consentimiento_marketing=consentimiento_marketing,
+            calendar_event_id=cita["calendar_event_id"],
+            tratamiento=tratamiento,
+            fecha=fecha_iso,
+            hora=hora,
         )
 
-        db = _read_json(CLIENTES_JSON, default=[])
-        now_iso = datetime.now(ZoneInfo(TIMEZONE)).isoformat()
-
-        cliente = next((c for c in db if c.get("id") == cliente_id), None)
-        if not cliente:
-            cliente = {
-                "id": cliente_id,
-                "nombre": nombre,
-                "email": email,
-                "consentimiento_marketing": consentimiento_marketing,
-                "historial": [],
-                "last_selected": {},
-                "created_at": now_iso,
-                "updated_at": now_iso,
-            }
-            db.append(cliente)
-        else:
-            cliente["nombre"] = nombre
-            cliente["email"] = email
-            cliente["consentimiento_marketing"] = consentimiento_marketing
-            cliente["updated_at"] = now_iso
-
-        cliente.setdefault("historial", [])
-        cliente["historial"].append({
-            "tratamiento": tratamiento,
-            "fecha": fecha_iso,
-            "hora": hora,
-            "calendar_event_id": cita.get("calendar_event_id"),
-            "status": "confirmada",
-            "created_at": now_iso,
-        })
-        cliente["last_selected"] = {"tratamiento": tratamiento, "fecha": fecha_iso, "hora": hora}
-
-        _write_json(CLIENTES_JSON, db)
+        notif_result = None
+        if email:
+            resumen = (
+                f"Hola {nombre}, tu cita para {tratamiento} queda confirmada.\n"
+                f"📅 Fecha: {fecha_iso}\n"
+                f"⏰ Hora: {hora}\n"
+                f"🔗 Enlace del evento: {cita.get('htmlLink','(no disponible)')}\n\n"
+                f"Gracias por confiar en Clínica Pure."
+            )
+            notif_result = _send_email(
+                to_email=email,
+                subject=f"Confirmación de cita: {tratamiento} ({fecha_iso} {hora})",
+                body_text=resumen,
+            )
 
         return {
             "ok": True,
@@ -499,36 +462,24 @@ def confirmar_reserva(
 
 @mcp.tool(
     name="obtener_cliente",
-    description="Devuelve el registro del cliente si existe en clientes.json, incluidas sus citas activas con calendar_event_id.",
+    description="Devuelve los datos del cliente si está registrado, incluidas sus citas activas (futuras) con calendar_event_id.",
 )
 def obtener_cliente(cliente_id: ClienteId) -> Dict[str, Any]:
     try:
-        db = _read_json(CLIENTES_JSON, default=[])
-        cliente = next((c for c in db if c.get("id") == cliente_id), None)
+        cliente = db.get_cliente(cliente_id)
         if not cliente:
             return {"ok": False, "error": "Cliente no registrado."}
         # Citas futuras no canceladas: el modelo necesita el calendar_event_id para modificar/cancelar
         hoy = datetime.now(ZoneInfo(TIMEZONE)).date().isoformat()
-        citas_activas = [
-            {
-                "calendar_event_id": h.get("calendar_event_id"),
-                "tratamiento": h.get("tratamiento"),
-                "fecha": h.get("fecha"),
-                "hora": h.get("hora"),
-                "status": h.get("status"),
-            }
-            for h in cliente.get("historial", [])
-            if h.get("status") != "cancelada" and h.get("calendar_event_id") and (h.get("fecha") or "") >= hoy
-        ]
         return {
             "ok": True,
             "cliente": {
-                "id": cliente.get("id"),
-                "nombre": cliente.get("nombre"),
-                "email": cliente.get("email"),
-                "consentimiento_marketing": cliente.get("consentimiento_marketing", False),
-                "last_selected": cliente.get("last_selected", {}),
-                "citas_activas": citas_activas,
+                "id": cliente["id"],
+                "nombre": cliente["nombre"],
+                "email": cliente["email"],
+                "consentimiento_marketing": bool(cliente["consentimiento_marketing"]),
+                "last_selected": db.ultima_cita(cliente_id) or {},
+                "citas_activas": db.citas_activas(cliente_id, desde=hoy),
             }
         }
     except Exception as e:

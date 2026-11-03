@@ -5,6 +5,9 @@ data/credentials.json
 
 # Datos personales de clientes
 data/clientes.json
+data/clientes.backup.json
+data/*.db
+data/*.db-*
 
 # Entorno y caché
 venv/
