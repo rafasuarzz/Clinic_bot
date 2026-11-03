@@ -2,6 +2,7 @@
 
 A Telegram assistant for an aesthetic clinic that answers questions about treatments and **books, reschedules and cancels appointments** in natural language. It is powered by **Claude** (Anthropic) and talks to Google Calendar, Gmail and a SQLite database through its own **MCP server**.
 
+[![CI](https://github.com/rafasuarzz/Clinic_bot/actions/workflows/ci.yml/badge.svg)](https://github.com/rafasuarzz/Clinic_bot/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![Claude](https://img.shields.io/badge/LLM-Claude%20Sonnet%205.5-D97757)
 ![MCP](https://img.shields.io/badge/protocol-MCP-6E56CF)
@@ -161,4 +162,17 @@ Then open your bot in Telegram and say hi. In VS Code you can also use the **Ser
 | `MCP_PORT` | `3333` | MCP server port |
 | `CLINICA_DB` | `data/clinica.db` | SQLite database path |
 
-Opening hours, slot length and the treatment catalog are set in `mcp_server.py` and `config/tratamientos.json`.
+Opening hours and slot length are set in `settings.py`; the treatment catalog in `config/tratamientos.json`.
+
+## Testing
+
+The test suite runs fully offline: every test gets a fresh temporary SQLite database, and Google Calendar and Gmail are replaced by an in-memory fake. MCP tools are exercised through a real MCP client connected in memory, and the agent loop runs against a scripted fake of Claude, so no API calls or credentials are needed.
+
+```bash
+pip install -r requirements-dev.txt
+pytest          # 61 tests: business rules, data layer, MCP tools, security, agent loop
+ruff check .    # lint
+ruff format .   # format
+```
+
+GitHub Actions runs lint, format check and tests on Python 3.10 and 3.12 for every push and pull request.
