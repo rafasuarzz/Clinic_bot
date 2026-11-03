@@ -157,11 +157,3 @@ Then open your bot in Telegram and say hi. In VS Code you can also use the **Ser
 | `CLINICA_DB` | `data/clinica.db` | SQLite database path |
 
 Opening hours, slot length and the treatment catalog are set in `mcp_server.py` and `config/tratamientos.json`.
-
-## Roadmap
-
-- [ ] Automated tests (pytest) and CI with GitHub Actions
-- [ ] Docker Compose deployment and Telegram webhooks
-- [ ] Appointment reminders 24 h before
-- [ ] Use the same MCP server from Claude Desktop as a front-desk assistant
-- [ ] GDPR commands: `/mis_datos`, `/borrar_mis_datos`
